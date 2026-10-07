@@ -132,9 +132,48 @@ bool scanForAuthorizedBluetooth() {
 }
 
 class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-        Serial.println("Device connecting...");
+#if defined(CONFIG_BLUEDROID_ENABLED)
+    void onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) {
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 param->connect.remote_bda[0], param->connect.remote_bda[1],
+                 param->connect.remote_bda[2], param->connect.remote_bda[3],
+                 param->connect.remote_bda[4], param->connect.remote_bda[5]);
+        String mac = String(macStr);
+        mac.toUpperCase();
+        
+        if(whitelistMacs.indexOf(mac) < 0) {
+            if(whitelistMacs.length() > 0 && !whitelistMacs.endsWith(",")) whitelistMacs += ",";
+            whitelistMacs += mac;
+            preferences.begin("scooty", false);
+            preferences.putString("macs", whitelistMacs);
+            preferences.end();
+        }
+        BLEDevice::getAdvertising()->stop();
+        pairingMode = false;
+        beepUnlock();
     }
+#elif defined(CONFIG_NIMBLE_ENABLED)
+    void onConnect(BLEServer* pServer, ble_gap_conn_desc *desc) {
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 desc->peer_id_addr.val[5], desc->peer_id_addr.val[4], desc->peer_id_addr.val[3],
+                 desc->peer_id_addr.val[2], desc->peer_id_addr.val[1], desc->peer_id_addr.val[0]);
+        String mac = String(macStr);
+        mac.toUpperCase();
+        
+        if(whitelistMacs.indexOf(mac) < 0) {
+            if(whitelistMacs.length() > 0 && !whitelistMacs.endsWith(",")) whitelistMacs += ",";
+            whitelistMacs += mac;
+            preferences.begin("scooty", false);
+            preferences.putString("macs", whitelistMacs);
+            preferences.end();
+        }
+        BLEDevice::getAdvertising()->stop();
+        pairingMode = false;
+        beepUnlock();
+    }
+#endif
     void onDisconnect(BLEServer* pServer) {}
 };
 
@@ -146,49 +185,11 @@ class MySecurity : public BLESecurityCallbacks {
 
 #if defined(CONFIG_BLUEDROID_ENABLED)
   void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl){
-    if(cmpl.success){
-      char macStr[18];
-      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-               cmpl.bd_addr[0], cmpl.bd_addr[1], cmpl.bd_addr[2],
-               cmpl.bd_addr[3], cmpl.bd_addr[4], cmpl.bd_addr[5]);
-      String mac = String(macStr);
-      mac.toUpperCase();
-      Serial.println("Device successfully paired: " + mac);
-      
-      if(whitelistMacs.indexOf(mac) < 0) {
-          whitelistMacs += mac + ",";
-          preferences.begin("scooty", false);
-          preferences.putString("macs", whitelistMacs);
-          preferences.end();
-          Serial.println("Added to whitelist!");
-      }
-      BLEDevice::getAdvertising()->stop();
-      pairingMode = false;
-      beepUnlock();
-    }
+    // MAC is already captured in onConnect
   }
 #elif defined(CONFIG_NIMBLE_ENABLED)
   void onAuthenticationComplete(ble_gap_conn_desc *desc){
-    if(desc->sec_state.bonded){
-      char macStr[18];
-      snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-               desc->peer_id_addr.val[5], desc->peer_id_addr.val[4], desc->peer_id_addr.val[3],
-               desc->peer_id_addr.val[2], desc->peer_id_addr.val[1], desc->peer_id_addr.val[0]);
-      String mac = String(macStr);
-      mac.toUpperCase();
-      Serial.println("Device successfully paired: " + mac);
-      
-      if(whitelistMacs.indexOf(mac) < 0) {
-          whitelistMacs += mac + ",";
-          preferences.begin("scooty", false);
-          preferences.putString("macs", whitelistMacs);
-          preferences.end();
-          Serial.println("Added to whitelist!");
-      }
-      BLEDevice::getAdvertising()->stop();
-      pairingMode = false;
-      beepUnlock();
-    }
+    // MAC is already captured in onConnect
   }
 #endif
 };
@@ -323,6 +324,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     <h4>Whitelisted BT MACs:</h4>
     <input type="text" id="macInput" placeholder="MAC Addresses">
     <button class="btn btn-blue" onclick="saveMac()">Save Manual MACs</button>
+    <button class="btn btn-green" onclick="fetchStatus()">Refresh Whitelist</button>
     <br><hr style="border-color:#333;"><br>
     
     <button class="btn btn-yellow" onclick="startPairing()">Enable Bluetooth Discovery</button>
