@@ -1,6 +1,6 @@
 /*
  * ============================================================
- *  SCOOTY KEYLESS IGNITION SYSTEM — Advanced Captive Portal + BLE Pairing
+ *  SMART BIKE KEYLESS IGNITION SYSTEM — Advanced Captive Portal + BLE Pairing
  *  Board: Seeed Studio XIAO ESP32S3
  * ============================================================
  */
@@ -26,17 +26,17 @@
 #define VIBRATION_GPIO    GPIO_NUM_6  // D5 on XIAO ESP32S3 is GPIO6
 
 // ─────────────────────── CONFIG ────────────────────────────────
-const char* AP_SSID = "MyScooty-Keyless";
+const char* AP_SSID = "SmartBike-Keyless";
 const byte DNS_PORT = 53;
 #define AUTO_LOCK_TIMEOUT 300000 // 5 minutes
 
-enum ScootyState {
+enum BikeState {
   STATE_LOCKED,
   STATE_UNLOCKED,
   STATE_ENGINE_ON
 };
 
-ScootyState currentState = STATE_LOCKED;
+BikeState currentState = STATE_LOCKED;
 unsigned long lastActivityTime = 0;
 bool deepSleepEnabled = false;
 bool autoUnlockEnabled = false;
@@ -145,7 +145,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
         if(whitelistMacs.indexOf(mac) < 0) {
             if(whitelistMacs.length() > 0 && !whitelistMacs.endsWith(",")) whitelistMacs += ",";
             whitelistMacs += mac;
-            preferences.begin("scooty", false);
+            preferences.begin("bike", false);
             preferences.putString("macs", whitelistMacs);
             preferences.end();
         }
@@ -165,7 +165,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
         if(whitelistMacs.indexOf(mac) < 0) {
             if(whitelistMacs.length() > 0 && !whitelistMacs.endsWith(",")) whitelistMacs += ",";
             whitelistMacs += mac;
-            preferences.begin("scooty", false);
+            preferences.begin("bike", false);
             preferences.putString("macs", whitelistMacs);
             preferences.end();
         }
@@ -201,7 +201,7 @@ void enableBluetoothPairing() {
   // Generate random 6-digit PIN
   pairingPIN = random(100000, 999999);
   
-  BLEDevice::init("Scooty_Pair");
+  BLEDevice::init("Bike_Pair");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   
@@ -215,7 +215,7 @@ void enableBluetoothPairing() {
   BLECharacteristic *pChar = pService->createCharacteristic("2A29", BLECharacteristic::PROPERTY_READ);
   // Require encryption to force pairing when phone tries to connect
   pChar->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_READ_ENC_MITM);
-  pChar->setValue("Scooty Keyless");
+  pChar->setValue("Smart Bike Keyless");
   pService->start();
   
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
@@ -266,7 +266,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Scooty Portal</title>
+  <title>Smart Bike Portal</title>
   <style>
     body { font-family: sans-serif; background: #121212; color: #fff; text-align: center; margin: 0; padding: 20px; }
     .btn { display: block; width: 100%; padding: 15px; margin: 10px 0; font-size: 18px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
@@ -280,7 +280,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
   </style>
 </head>
 <body>
-  <h2>🏍️ MyScooty Portal</h2>
+  <h2>🏍️ Smart Bike Portal</h2>
   
   <div class="card" id="statusCard">
     <h3 id="statusText">Checking Status...</h3>
@@ -329,7 +329,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     
     <button class="btn btn-yellow" onclick="startPairing()">Enable Bluetooth Discovery</button>
     <div id="pinBox" class="pin-box"></div>
-    <p style="font-size:12px; color:#aaa; margin-top:5px;">Connect your phone to 'Scooty_Pair' and enter this PIN. Your MAC will be saved automatically.</p>
+    <p style="font-size:12px; color:#aaa; margin-top:5px;">Connect your phone to 'Bike_Pair' and enter this PIN. Your MAC will be saved automatically.</p>
   </div>
 
   <script>
@@ -430,7 +430,7 @@ void handleCmd() {
 
 void handleSetDS() {
   deepSleepEnabled = (server.arg("v") == "1");
-  preferences.begin("scooty", false);
+  preferences.begin("bike", false);
   preferences.putBool("ds", deepSleepEnabled);
   preferences.end();
   server.send(200, "text/plain", "OK");
@@ -438,7 +438,7 @@ void handleSetDS() {
 
 void handleSetAutoUnlock() {
   autoUnlockEnabled = (server.arg("v") == "1");
-  preferences.begin("scooty", false);
+  preferences.begin("bike", false);
   preferences.putBool("auto_unlock", autoUnlockEnabled);
   preferences.end();
   server.send(200, "text/plain", "OK");
@@ -450,7 +450,7 @@ void handleSetSens() {
   if(vibSensitivity < 1 || vibSensitivity > 3) vibSensitivity = 1;
   if(btRange < 1 || btRange > 3) btRange = 2;
   
-  preferences.begin("scooty", false);
+  preferences.begin("bike", false);
   preferences.putInt("vib", vibSensitivity);
   preferences.putInt("bt", btRange);
   preferences.end();
@@ -460,7 +460,7 @@ void handleSetSens() {
 void handleSetMac() {
   whitelistMacs = server.arg("v");
   whitelistMacs.toUpperCase();
-  preferences.begin("scooty", false);
+  preferences.begin("bike", false);
   preferences.putString("macs", whitelistMacs);
   preferences.end();
   server.send(200, "text/plain", "OK");
@@ -491,7 +491,7 @@ void setup() {
   digitalWrite(RELAY_IGNITION, LOW);
   digitalWrite(RELAY_STARTER, LOW);
   
-  preferences.begin("scooty", true);
+  preferences.begin("bike", true);
   deepSleepEnabled = preferences.getBool("ds", false);
   autoUnlockEnabled = preferences.getBool("auto_unlock", false);
   vibSensitivity = preferences.getInt("vib", 1);
