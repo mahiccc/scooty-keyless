@@ -40,6 +40,8 @@ ScootyState currentState = STATE_LOCKED;
 unsigned long lastActivityTime = 0;
 bool deepSleepEnabled = false;
 bool autoUnlockEnabled = false;
+int vibSensitivity = 1; // 1=High, 2=Medium, 3=Low
+int btRange = 2; // 1=High (Near), 2=Medium, 3=Low (Far)
 String whitelistMacs = ""; 
 int scanTime = 4; // seconds
 
@@ -97,9 +99,21 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
     void onResult(BLEAdvertisedDevice advertisedDevice) {
       String deviceMac = advertisedDevice.getAddress().toString().c_str();
       deviceMac.toUpperCase();
+      int rssi = advertisedDevice.getRSSI();
+      
       if (whitelistMacs.length() > 0 && whitelistMacs.indexOf(deviceMac) >= 0) {
-        Serial.println("Authorized device found: " + deviceMac);
-        foundAuthorizedDevice = true;
+        // Check RSSI based on user setting
+        bool rssiOk = false;
+        if (btRange == 1 && rssi >= -60) rssiOk = true; // High (Near)
+        else if (btRange == 2 && rssi >= -75) rssiOk = true; // Medium
+        else if (btRange == 3 && rssi >= -95) rssiOk = true; // Low (Far)
+        
+        if (rssiOk) {
+          Serial.println("Authorized device found near: " + deviceMac + " (RSSI: " + String(rssi) + ")");
+          foundAuthorizedDevice = true;
+        } else {
+          Serial.println("Device " + deviceMac + " found but too far (RSSI: " + String(rssi) + ")");
+        }
       }
     }
 };
@@ -218,6 +232,26 @@ void goToDeepSleep() {
   esp_deep_sleep_start();
 }
 
+bool checkVibrationSensitivity() {
+  if (vibSensitivity == 1) return true; // High sensitivity, any wake is enough
+  
+  // For Medium (>= 3 pulses) or Low (>= 7 pulses) in a 400ms window
+  int pulses = 0;
+  int targetPulses = (vibSensitivity == 2) ? 3 : 7;
+  int lastState = digitalRead(VIBRATION_SENSOR);
+  unsigned long startT = millis();
+  
+  while (millis() - startT < 400) {
+    int state = digitalRead(VIBRATION_SENSOR);
+    if (state != lastState && state == HIGH) pulses++;
+    lastState = state;
+    delay(2);
+  }
+  
+  Serial.println("Vibration pulses counted: " + String(pulses));
+  return (pulses >= targetPulses);
+}
+
 // ─────────────────────── WEB SERVER PAGES ──────────────────────
 const char MAIN_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -233,7 +267,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     .btn-blue { background: #448aff; color: #fff; }
     .btn-yellow { background: #ffea00; color: #000; }
     .card { background: #1e1e1e; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
-    input[type=text] { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444; background: #222; color: #fff; }
+    input[type=text], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444; background: #222; color: #fff; }
     .pin-box { background: #333; padding: 15px; font-size: 24px; letter-spacing: 5px; color: #00e676; border-radius: 8px; margin-top: 10px; display: none; }
   </style>
 </head>
@@ -265,6 +299,20 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     </label>
     <br><br>
     
+    <label>Vibration Sensitivity:</label>
+    <select id="vibSelect" onchange="updateSensSettings()">
+      <option value="1">High (Very Sensitive)</option>
+      <option value="2">Medium (Normal)</option>
+      <option value="3">Low (Hard hit needed)</option>
+    </select>
+    
+    <label>Bluetooth Auto-Unlock Range:</label>
+    <select id="btSelect" onchange="updateSensSettings()">
+      <option value="1">High (Very Close)</option>
+      <option value="2">Medium (Within a few meters)</option>
+      <option value="3">Low (Max Range)</option>
+    </select>
+
     <h4>Whitelisted BT MACs:</h4>
     <input type="text" id="macInput" placeholder="MAC Addresses">
     <button class="btn btn-blue" onclick="saveMac()">Save Manual MACs</button>
@@ -282,6 +330,8 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
       document.getElementById('statusText').innerText = "Status: " + data.state.toUpperCase();
       document.getElementById('dsToggle').checked = data.ds;
       document.getElementById('autoUnlockToggle').checked = data.auto_unlock;
+      document.getElementById('vibSelect').value = data.vib_sens;
+      document.getElementById('btSelect').value = data.bt_sens;
       document.getElementById('macInput').value = data.macs;
       
       if(data.pairing) {
@@ -305,6 +355,12 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     async function toggleAutoUnlock() {
       const val = document.getElementById('autoUnlockToggle').checked ? 1 : 0;
       await fetch('/set_auto?v=' + val);
+    }
+    
+    async function updateSensSettings() {
+      const v = document.getElementById('vibSelect').value;
+      const b = document.getElementById('btSelect').value;
+      await fetch(`/set_sens?v=${v}&b=${b}`);
     }
     
     async function saveMac() {
@@ -334,6 +390,8 @@ void handleStatus() {
   String json = "{\"state\":\"" + stateStr + 
                 "\", \"ds\":" + (deepSleepEnabled ? "true" : "false") + 
                 ", \"auto_unlock\":" + (autoUnlockEnabled ? "true" : "false") +
+                ", \"vib_sens\":" + String(vibSensitivity) +
+                ", \"bt_sens\":" + String(btRange) +
                 ", \"pairing\":" + (pairingMode ? "true" : "false") + 
                 ", \"pin\":\"" + String(pairingPIN) + "\"" +
                 ", \"macs\":\"" + whitelistMacs + "\"}";
@@ -377,6 +435,19 @@ void handleSetAutoUnlock() {
   server.send(200, "text/plain", "OK");
 }
 
+void handleSetSens() {
+  vibSensitivity = server.arg("v").toInt();
+  btRange = server.arg("b").toInt();
+  if(vibSensitivity < 1 || vibSensitivity > 3) vibSensitivity = 1;
+  if(btRange < 1 || btRange > 3) btRange = 2;
+  
+  preferences.begin("scooty", false);
+  preferences.putInt("vib", vibSensitivity);
+  preferences.putInt("bt", btRange);
+  preferences.end();
+  server.send(200, "text/plain", "OK");
+}
+
 void handleSetMac() {
   whitelistMacs = server.arg("v");
   whitelistMacs.toUpperCase();
@@ -414,6 +485,8 @@ void setup() {
   preferences.begin("scooty", true);
   deepSleepEnabled = preferences.getBool("ds", false);
   autoUnlockEnabled = preferences.getBool("auto_unlock", false);
+  vibSensitivity = preferences.getInt("vib", 1);
+  btRange = preferences.getInt("bt", 2);
   whitelistMacs = preferences.getString("macs", "");
   preferences.end();
   
@@ -434,6 +507,7 @@ void setup() {
   server.on("/cmd", handleCmd);
   server.on("/set_ds", handleSetDS);
   server.on("/set_auto", handleSetAutoUnlock);
+  server.on("/set_sens", handleSetSens);
   server.on("/set_mac", handleSetMac);
   server.on("/start_pairing", handleStartPairing);
   server.onNotFound(handleRedirect);
@@ -444,22 +518,27 @@ void setup() {
   if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("[WAKE] Woken up by Vibration Sensor!");
     
-    if (autoUnlockEnabled && whitelistMacs.length() > 0) {
-      if (scanForAuthorizedBluetooth()) {
-        Serial.println("[AUTH] Whitelisted BT found! Unlocking...");
-        currentState = STATE_ENGINE_ON;
-        ignitionOn();
-        updateLEDs();
-        beepUnlock();
+    if (checkVibrationSensitivity()) {
+      if (autoUnlockEnabled && whitelistMacs.length() > 0) {
+        if (scanForAuthorizedBluetooth()) {
+          Serial.println("[AUTH] Whitelisted BT found! Unlocking...");
+          currentState = STATE_ENGINE_ON;
+          ignitionOn();
+          updateLEDs();
+          beepUnlock();
+        } else {
+          Serial.println("[AUTH] No whitelisted BT found. Sleeping.");
+          goToDeepSleep(); 
+        }
       } else {
-        Serial.println("[AUTH] No whitelisted BT found. Sleeping.");
-        goToDeepSleep(); 
+        Serial.println("[WAKE] Auto-unlock disabled or no MACs. Staying awake for portal.");
+        currentState = STATE_LOCKED;
+        updateLEDs();
+        beepLock();
       }
     } else {
-      Serial.println("[WAKE] Auto-unlock disabled or no MACs. Staying awake for portal.");
-      currentState = STATE_LOCKED;
-      updateLEDs();
-      beepLock();
+      Serial.println("[WAKE] Vibration false alarm (sensitivity threshold not met). Sleeping.");
+      goToDeepSleep();
     }
   } else {
     Serial.println("[BOOT] Normal Boot");
