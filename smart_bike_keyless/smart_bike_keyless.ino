@@ -45,6 +45,21 @@ int btRange = 2; // 1=High (Near), 2=Medium, 3=Low (Far)
 String whitelistMacs = ""; 
 int scanTime = 4; // seconds
 
+// ─────────────────────── AUDIT LOGS ──────────────────────────
+#define MAX_LOGS 15
+String auditLogs[MAX_LOGS];
+int logIndex = 0;
+bool btNearby = false;
+unsigned long lastBtCheck = 0;
+
+void addLog(String msg) {
+  unsigned long t = millis() / 1000;
+  String timeStr = "[" + String(t) + "s] ";
+  auditLogs[logIndex] = timeStr + msg;
+  logIndex = (logIndex + 1) % MAX_LOGS;
+  Serial.println("AUDIT: " + msg);
+}
+
 bool pairingMode = false;
 uint32_t pairingPIN = 123456;
 
@@ -111,6 +126,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
         if (rssiOk) {
           Serial.println("Authorized device found near: " + deviceMac + " (RSSI: " + String(rssi) + ")");
           foundAuthorizedDevice = true;
+          btNearby = true;
         } else {
           Serial.println("Device " + deviceMac + " found but too far (RSSI: " + String(rssi) + ")");
         }
@@ -148,6 +164,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
             preferences.begin("bike", false);
             preferences.putString("macs", whitelistMacs);
             preferences.end();
+            addLog("New MAC Whitelisted: " + mac);
         }
         BLEDevice::getAdvertising()->stop();
         pairingMode = false;
@@ -168,6 +185,7 @@ class MyServerCallbacks: public BLEServerCallbacks {
             preferences.begin("bike", false);
             preferences.putString("macs", whitelistMacs);
             preferences.end();
+            addLog("New MAC Whitelisted: " + mac);
         }
         BLEDevice::getAdvertising()->stop();
         pairingMode = false;
@@ -200,6 +218,7 @@ void enableBluetoothPairing() {
   
   // Generate random 6-digit PIN
   pairingPIN = random(100000, 999999);
+  addLog("BLE Pairing started. PIN: " + String(pairingPIN));
   
   BLEDevice::init("Bike_Pair");
   pServer = BLEDevice::createServer();
@@ -227,6 +246,7 @@ void enableBluetoothPairing() {
 }
 
 void goToDeepSleep() {
+  addLog("Entering Deep Sleep...");
   Serial.println("Entering Deep Sleep... Wake on vibration (D5/GPIO6)");
   ignitionOff();
   updateLEDs();
@@ -277,17 +297,23 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     .card { background: #1e1e1e; padding: 20px; border-radius: 12px; margin-bottom: 20px; }
     input[type=text], select { width: calc(100% - 22px); padding: 10px; margin-bottom: 10px; border-radius: 6px; border: 1px solid #444; background: #222; color: #fff; }
     .pin-box { background: #333; padding: 15px; font-size: 24px; letter-spacing: 5px; color: #00e676; border-radius: 8px; margin-top: 10px; display: none; }
+    .badge { display: inline-block; padding: 5px 10px; border-radius: 4px; font-size: 14px; margin-left: 10px; }
+    .badge-green { background: #00e676; color: #000; }
+    .badge-gray { background: #555; color: #fff; }
+    .log-box { background: #111; padding: 10px; border-radius: 6px; font-family: monospace; font-size: 12px; text-align: left; height: 150px; overflow-y: auto; white-space: pre-wrap; }
   </style>
 </head>
 <body>
   <h2>🏍️ Smart Bike Portal</h2>
   
   <div class="card" id="statusCard">
-    <h3 id="statusText">Checking Status...</h3>
+    <h3 style="display:inline-block; margin:0;" id="statusText">Checking Status...</h3>
+    <span id="btBadge" class="badge badge-gray">BT: Unknown</span>
   </div>
 
   <div class="card">
     <h3>Controls</h3>
+    <button class="btn btn-blue" onclick="cmd('check_bt')" style="margin-bottom: 20px;">📡 Scan for Phone Proximity</button>
     <button class="btn btn-green" onclick="cmd('ign_on')">🔓 Ignition ON</button>
     <button class="btn btn-yellow" onclick="cmd('start')">⚡ Self Start</button>
     <button class="btn btn-red" onclick="cmd('ign_off')">🔒 Ignition OFF</button>
@@ -332,6 +358,11 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     <p style="font-size:12px; color:#aaa; margin-top:5px;">Connect your phone to 'Bike_Pair' and enter this PIN. Your MAC will be saved automatically.</p>
   </div>
 
+  <div class="card">
+    <h3>Audit Logs</h3>
+    <div id="logBox" class="log-box">Loading logs...</div>
+  </div>
+
   <script>
     async function fetchStatus() {
       const res = await fetch('/status');
@@ -343,12 +374,24 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
       document.getElementById('btSelect').value = data.bt_sens;
       document.getElementById('macInput').value = data.macs;
       
+      if(data.bt_nearby) {
+        document.getElementById('btBadge').className = "badge badge-green";
+        document.getElementById('btBadge').innerText = "📱 Phone Nearby";
+      } else {
+        document.getElementById('btBadge').className = "badge badge-gray";
+        document.getElementById('btBadge').innerText = "Phone Not Found";
+      }
+      
       if(data.pairing) {
         document.getElementById('pinBox').style.display = "block";
         document.getElementById('pinBox').innerText = data.pin;
       } else {
         document.getElementById('pinBox').style.display = "none";
       }
+      
+      const logRes = await fetch('/logs');
+      const logData = await logRes.text();
+      document.getElementById('logBox').innerText = logData;
     }
     
     async function cmd(action) {
@@ -402,26 +445,49 @@ void handleStatus() {
                 ", \"vib_sens\":" + String(vibSensitivity) +
                 ", \"bt_sens\":" + String(btRange) +
                 ", \"pairing\":" + (pairingMode ? "true" : "false") + 
+                ", \"bt_nearby\":" + (btNearby ? "true" : "false") + 
                 ", \"pin\":\"" + String(pairingPIN) + "\"" +
                 ", \"macs\":\"" + whitelistMacs + "\"}";
   server.send(200, "application/json", json);
 }
 
+void handleLogs() {
+  String out = "";
+  // print from oldest to newest in the circular buffer
+  for(int i=0; i<MAX_LOGS; i++) {
+    int idx = (logIndex + i) % MAX_LOGS;
+    if(auditLogs[idx].length() > 0) {
+      out += auditLogs[idx] + "\n";
+    }
+  }
+  if(out == "") out = "No logs yet.";
+  server.send(200, "text/plain", out);
+}
+
 void handleCmd() {
   String action = server.arg("a");
   if (action == "ign_on") {
+    addLog("Ignition ON via Portal");
     currentState = STATE_UNLOCKED;
     ignitionOn();
     beepUnlock();
   } else if (action == "start") {
+    addLog("Engine Started via Portal");
     currentState = STATE_ENGINE_ON;
     startEngine();
   } else if (action == "ign_off") {
+    addLog("Ignition OFF via Portal");
     currentState = STATE_LOCKED;
     stopEngine();
     beepLock();
   } else if (action == "locate") {
+    addLog("Locate Bike Triggered");
     beepLocate();
+  } else if (action == "check_bt") {
+    addLog("Scanning for Phone...");
+    scanForAuthorizedBluetooth();
+    if(btNearby) addLog("Phone found nearby!");
+    else addLog("Phone not found nearby.");
   }
   updateLEDs();
   lastActivityTime = millis();
@@ -433,6 +499,7 @@ void handleSetDS() {
   preferences.begin("bike", false);
   preferences.putBool("ds", deepSleepEnabled);
   preferences.end();
+  addLog("Deep Sleep toggled: " + String(deepSleepEnabled));
   server.send(200, "text/plain", "OK");
 }
 
@@ -441,6 +508,7 @@ void handleSetAutoUnlock() {
   preferences.begin("bike", false);
   preferences.putBool("auto_unlock", autoUnlockEnabled);
   preferences.end();
+  addLog("Auto-Unlock toggled: " + String(autoUnlockEnabled));
   server.send(200, "text/plain", "OK");
 }
 
@@ -454,6 +522,7 @@ void handleSetSens() {
   preferences.putInt("vib", vibSensitivity);
   preferences.putInt("bt", btRange);
   preferences.end();
+  addLog("Sensitivities updated");
   server.send(200, "text/plain", "OK");
 }
 
@@ -463,6 +532,7 @@ void handleSetMac() {
   preferences.begin("bike", false);
   preferences.putString("macs", whitelistMacs);
   preferences.end();
+  addLog("MAC whitelist updated manually");
   server.send(200, "text/plain", "OK");
 }
 
@@ -513,6 +583,7 @@ void setup() {
   
   server.on("/", handleRoot);
   server.on("/status", handleStatus);
+  server.on("/logs", handleLogs);
   server.on("/cmd", handleCmd);
   server.on("/set_ds", handleSetDS);
   server.on("/set_auto", handleSetAutoUnlock);
@@ -525,31 +596,37 @@ void setup() {
   
   // Handle Wakeup Cause
   if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+    addLog("Woke up by Vibration Sensor");
     Serial.println("[WAKE] Woken up by Vibration Sensor!");
     
     if (checkVibrationSensitivity()) {
       if (autoUnlockEnabled && whitelistMacs.length() > 0) {
         if (scanForAuthorizedBluetooth()) {
+          addLog("Whitelisted BT found! Unlocking.");
           Serial.println("[AUTH] Whitelisted BT found! Unlocking...");
           currentState = STATE_ENGINE_ON;
           ignitionOn();
           updateLEDs();
           beepUnlock();
         } else {
+          addLog("No whitelisted BT found. Sleeping.");
           Serial.println("[AUTH] No whitelisted BT found. Sleeping.");
           goToDeepSleep(); 
         }
       } else {
+        addLog("Auto-unlock disabled. Waiting for portal.");
         Serial.println("[WAKE] Auto-unlock disabled or no MACs. Staying awake for portal.");
         currentState = STATE_LOCKED;
         updateLEDs();
         beepLock();
       }
     } else {
+      addLog("Vibration false alarm. Sleeping.");
       Serial.println("[WAKE] Vibration false alarm (sensitivity threshold not met). Sleeping.");
       goToDeepSleep();
     }
   } else {
+    addLog("Normal Boot / Reset");
     Serial.println("[BOOT] Normal Boot");
     currentState = STATE_LOCKED;
     updateLEDs();
