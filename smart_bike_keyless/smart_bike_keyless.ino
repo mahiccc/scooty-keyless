@@ -27,6 +27,7 @@
 
 // ─────────────────────── CONFIG ────────────────────────────────
 const char* AP_SSID = "SmartBike-Keyless";
+const char* AP_PASS = "kkl12345";
 const byte DNS_PORT = 53;
 #define AUTO_LOCK_TIMEOUT 300000 // 5 minutes
 
@@ -285,6 +286,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Smart Bike Portal</title>
   <style>
@@ -351,6 +353,7 @@ const char MAIN_PAGE[] PROGMEM = R"rawliteral(
     <input type="text" id="macInput" placeholder="MAC Addresses">
     <button class="btn btn-blue" onclick="saveMac()">Save Manual MACs</button>
     <button class="btn btn-green" onclick="fetchStatus()">Refresh Whitelist</button>
+    <button class="btn btn-red" onclick="cmd('clear_macs')" style="margin-top:10px;">Clear Whitelist</button>
     <br><hr style="border-color:#333;"><br>
     
     <button class="btn btn-yellow" onclick="startPairing()">Enable Bluetooth Discovery</button>
@@ -488,6 +491,12 @@ void handleCmd() {
     scanForAuthorizedBluetooth();
     if(btNearby) addLog("Phone found nearby!");
     else addLog("Phone not found nearby.");
+  } else if (action == "clear_macs") {
+    whitelistMacs = "";
+    preferences.begin("bike", false);
+    preferences.putString("macs", whitelistMacs);
+    preferences.end();
+    addLog("Cleared all whitelisted MACs!");
   }
   updateLEDs();
   lastActivityTime = millis();
@@ -576,7 +585,7 @@ void setup() {
   
   // Setup WiFi Access Point
   WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID); 
+  WiFi.softAP(AP_SSID, AP_PASS); 
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
   
   dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
