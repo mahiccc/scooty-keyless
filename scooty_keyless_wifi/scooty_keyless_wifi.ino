@@ -204,11 +204,18 @@ void enableBluetoothPairing() {
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   
-  BLESecurity *pSecurity = new BLESecurity();
   BLEDevice::setSecurityCallbacks(new MySecurity());
+  BLESecurity *pSecurity = new BLESecurity();
   pSecurity->setAuthenticationMode(ESP_LE_AUTH_REQ_SC_BOND);
   pSecurity->setCapability(ESP_IO_CAP_OUT);
   pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
+  
+  BLEService *pService = pServer->createService("180A");
+  BLECharacteristic *pChar = pService->createCharacteristic("2A29", BLECharacteristic::PROPERTY_READ);
+  // Require encryption to force pairing when phone tries to connect
+  pChar->setAccessPermissions(ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_READ_ENC_MITM);
+  pChar->setValue("Scooty Keyless");
+  pService->start();
   
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID("180A");
